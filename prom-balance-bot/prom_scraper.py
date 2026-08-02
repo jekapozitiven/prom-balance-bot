@@ -72,14 +72,27 @@ async def get_balance_from_cabinet() -> float:
                 except Exception:  # noqa: BLE001
                     continue
 
-            await page.goto(BALANCE_URL, wait_until="networkidle", timeout=45000)
-            # если сессия протухла и нас редиректнуло на логин
-            if "login" in page.url.lower() or "auth" in page.url.lower():
-                raise RuntimeError(
-                    "Сессия истекла — отправь /login ещё раз"
-                )
-            body = await page.inner_text("body")
-            balance = _parse_balance(body)
+            # грузим быстро (без networkidle — SPA Prom никогда не «затихает»)
+            await page.goto(BALANCE_URL, wait_until="domcontentloaded", timeout=60000)
+
+            # опрашиваем страницу до ~25 сек, пока не отрисуется баланс
+            body = ""
+            balance = None
+            for _ in range(25):
+                url = page.url.lower()
+                # редирект на витрину/логин = сессия не активна
+                if ("my.prom.ua" not in url) or ("source=redirect" in url) \
+                        or ("next=" in url) or ("login" in url) or ("auth" in url):
+                    raise RuntimeError("Сессия неактивна — отправь /login ещё раз")
+                try:
+                    body = await page.inner_text("body")
+                except Exception:  # noqa: BLE001
+                    body = ""
+                balance = _parse_balance(body)
+                if balance is not None:
+                    break
+                await page.wait_for_timeout(1000)
+
             if balance is None:
                 title = ""
                 try:
@@ -87,7 +100,7 @@ async def get_balance_from_cabinet() -> float:
                 except Exception:  # noqa: BLE001
                     pass
                 keys = ("грн", "₴", "UAH", "баланс", "Баланс", "рахун",
-                        "Рахун", "кошел", "Кошел", "борг", "Борг")
+                        "Рахун", "кошел", "Кошел", "борг", "Борг", "бюджет")
                 found = []
                 for line in body.splitlines():
                     s = line.strip()

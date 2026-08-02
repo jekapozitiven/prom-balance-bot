@@ -180,11 +180,21 @@ class LoginManager:
                                 timeout=45000)
                 await page.wait_for_timeout(2500)
 
-                # открыть форму, если она за кнопкой "Вхід"
+                # шаг 1: открыть меню кабинета ("Кабінет")
+                for opener in ["button:has-text('Кабінет')",
+                               "button:has-text('Кабинет')", "text=Кабінет"]:
+                    try:
+                        await page.locator(opener).first.click(timeout=2500)
+                        await page.wait_for_timeout(2500)
+                        break
+                    except Exception:  # noqa: BLE001
+                        continue
+
+                # шаг 2: нажать "Вхід/Войти", если появилось
                 for opener in OPENERS:
                     try:
                         await page.locator(opener).first.click(timeout=2000)
-                        await page.wait_for_timeout(1500)
+                        await page.wait_for_timeout(2000)
                         break
                     except Exception:  # noqa: BLE001
                         continue

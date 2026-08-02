@@ -58,15 +58,30 @@ async def get_balance_from_cabinet() -> float:
         )
         page = await context.new_page()
         try:
+            # прогрев: сперва открываем главную кабинета, чтобы установилась
+            # сессия seller-кабинета, иначе прямой заход на /cms/* даёт 404
+            for warmup in ("https://my.prom.ua/cms/", "https://my.prom.ua/"):
+                try:
+                    await page.goto(warmup, wait_until="domcontentloaded", timeout=45000)
+                    await page.wait_for_timeout(2500)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+
             await page.goto(config.PROM_BALANCE_URL, wait_until="networkidle", timeout=45000)
             # если сессия протухла и нас редиректнуло на логин
             if "login" in page.url.lower() or "auth" in page.url.lower():
                 raise RuntimeError(
-                    "Сессия истекла — перелогинься через save_session.py"
+                    "Сессия истекла — отправь /login ещё раз"
                 )
             body = await page.inner_text("body")
             balance = _parse_balance(body)
             if balance is None:
+                title = ""
+                try:
+                    title = await page.title()
+                except Exception:  # noqa: BLE001
+                    pass
                 keys = ("грн", "₴", "UAH", "баланс", "Баланс", "рахун",
                         "Рахун", "кошел", "Кошел", "борг", "Борг")
                 found = []
@@ -74,10 +89,10 @@ async def get_balance_from_cabinet() -> float:
                     s = line.strip()
                     if s and any(k in s for k in keys):
                         found.append(s[:90])
-                snippet = " | ".join(found[:15]) if found else body[:300]
+                snippet = " | ".join(found[:12]) if found else body[:250]
                 raise RuntimeError(
-                    "Не нашёл баланс на странице. Что там реально написано: "
-                    + snippet
+                    f"Не нашёл баланс. URL={page.url} | title='{title}' | "
+                    f"текст: {snippet}"
                 )
             # переписываем сессию свежими куками — так вход "1 раз" живёт долго
             try:

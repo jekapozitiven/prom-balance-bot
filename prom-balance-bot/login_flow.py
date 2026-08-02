@@ -27,17 +27,19 @@ LAUNCH_ARGS = [
 ]
 
 # кандидаты селекторов (первый подходящий — используется)
+# форма Prom — в iframe connect-rid.prom.ua, вход по телефону (autocomplete=tel)
 LOGIN_SELECTORS = [
+    "input[autocomplete='tel']",
+    "input[inputmode='tel']",
+    "input[type='tel']",
+    "input[name*='phone']",
     "input[name='email']",
     "input[type='email']",
     "input[autocomplete='username']",
     "input[name='login']",
-    "input[name*='phone']",
-    "input[type='tel']",
     "input[inputmode='email']",
-    "input[placeholder*='mail' i]",
     "input[placeholder*='телефон' i]",
-    "input[placeholder*='ошта' i]",
+    "input[placeholder*='mail' i]",
 ]
 PASSWORD_SELECTORS = [
     "input[type='password']",
@@ -95,16 +97,18 @@ class LoginManager:
         return [page] + [f for f in page.frames if f != page.main_frame]
 
     async def _first(self, page, selectors, timeout=8000):
-        """Первый видимый элемент из кандидатов, ищем и во фреймах."""
-        deadline_each = max(timeout // max(len(selectors), 1), 1200)
-        for scope in self._frames(page):
-            for sel in selectors:
-                try:
-                    el = scope.locator(sel).first
-                    await el.wait_for(state="visible", timeout=deadline_each)
-                    return el
-                except Exception:  # noqa: BLE001
-                    continue
+        """Первый видимый элемент из кандидатов; сканируем все фреймы по кругу."""
+        rounds = max(int(timeout / 1000), 3)
+        for _ in range(rounds):
+            for scope in self._frames(page):
+                for sel in selectors:
+                    try:
+                        loc = scope.locator(sel).first
+                        if await loc.count() and await loc.is_visible():
+                            return loc
+                    except Exception:  # noqa: BLE001
+                        continue
+            await page.wait_for_timeout(1000)
         return None
 
     async def run(self, send) -> bool:

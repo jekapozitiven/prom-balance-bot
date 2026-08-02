@@ -6,9 +6,8 @@ SMS/2FA-код — просит тебя прислать код в чат. Ты
 бот его подставляет и сохраняет сессию (state.json) на постоянный том.
 После этого мониторинг работает сам, повторный вход нужен редко.
 
-Селекторы Prom могут меняться — поэтому используем несколько кандидатов
-и мягко деградируем. Если автоматический вход не удался, бот честно сообщит
-об этом, и можно временно работать в режиме оценки по API (BALANCE_SOURCE=api).
+Если поле входа не найдено, бот присылает список всех полей страницы —
+по нему легко дописать точные селекторы.
 """
 import asyncio
 import logging
@@ -19,13 +18,26 @@ import config
 
 log = logging.getLogger("login")
 
+# флаги, без которых Chromium не стартует/падает в контейнере (Railway)
+LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+]
+
 # кандидаты селекторов (первый подходящий — используется)
 LOGIN_SELECTORS = [
     "input[name='email']",
     "input[type='email']",
     "input[autocomplete='username']",
-    "input[type='tel']",
     "input[name='login']",
+    "input[name*='phone']",
+    "input[type='tel']",
+    "input[inputmode='email']",
+    "input[placeholder*='mail' i]",
+    "input[placeholder*='телефон' i]",
+    "input[placeholder*='ошта' i]",
 ]
 PASSWORD_SELECTORS = [
     "input[type='password']",
@@ -37,13 +49,23 @@ OTP_SELECTORS = [
     "input[name*='code']",
     "input[name*='otp']",
     "input[id*='code']",
+    "input[inputmode='numeric']",
 ]
 SUBMIT_SELECTORS = [
     "button[type='submit']",
     "button:has-text('Увійти')",
     "button:has-text('Войти')",
+    "button:has-text('Вхід')",
     "button:has-text('Продовжити')",
+    "button:has-text('Продолжить')",
     "button:has-text('Далі')",
+    "button:has-text('Далее')",
+]
+# текст кнопки/ссылки, открывающей форму входа
+OPENERS = [
+    "text=Вхід", "text=Войти", "text=Увійти",
+    "a:has-text('Вхід')", "a:has-text('Войти')",
+    "button:has-text('Вхід')", "button:has-text('Войти')",
 ]
 
 
@@ -63,35 +85,34 @@ class LoginManager:
         return self._otp_future is not None and not self._otp_future.done()
 
     def submit_otp(self, code: str) -> bool:
-        """Передать код из чата в ожидающий процесс входа."""
         if self.awaiting_otp:
             self._otp_future.set_result(code.strip())
             return True
         return False
 
+    def _frames(self, page):
+        """Основная страница + все iframe (форма входа бывает в iframe)."""
+        return [page] + [f for f in page.frames if f != page.main_frame]
+
     async def _first(self, page, selectors, timeout=8000):
-        """Найти первый существующий элемент из списка кандидатов."""
-        for sel in selectors:
-            try:
-                el = page.locator(sel).first
-                await el.wait_for(state="visible", timeout=timeout)
-                return el
-            except Exception:  # noqa: BLE001
-                continue
+        """Первый видимый элемент из кандидатов, ищем и во фреймах."""
+        deadline_each = max(timeout // max(len(selectors), 1), 1200)
+        for scope in self._frames(page):
+            for sel in selectors:
+                try:
+                    el = scope.locator(sel).first
+                    await el.wait_for(state="visible", timeout=deadline_each)
+                    return el
+                except Exception:  # noqa: BLE001
+                    continue
         return None
 
     async def run(self, send) -> bool:
-        """Выполнить вход. send — async-функция для сообщений пользователю.
-
-        Возвращает True при успехе.
-        """
         if self._running:
             await send("Вход уже выполняется, подожди…")
             return False
         if not config.PROM_LOGIN or not config.PROM_PASSWORD:
-            await send(
-                "Не заданы PROM_LOGIN / PROM_PASSWORD в переменных окружения."
-            )
+            await send("Не заданы PROM_LOGIN / PROM_PASSWORD в переменных окружения.")
             return False
 
         self._running = True
@@ -99,34 +120,81 @@ class LoginManager:
             return await self._run(send)
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка входа")
-            await send(f"⚠️ Не удалось войти автоматически: {e}\n"
-                       f"Можно временно перейти на оценку по API (BALANCE_SOURCE=api).")
+            await send(f"⚠️ Не удалось войти автоматически: {e}")
             return False
         finally:
             self._running = False
             self._otp_future = None
 
+    async def _dump_fields(self, page, send):
+        """Прислать список полей/кнопок и адрес — для настройки селекторов."""
+        try:
+            data = await page.evaluate(
+                """() => {
+                    const grab = (root) => Array.from(root.querySelectorAll('input,button'))
+                      .map(e => ({
+                        t: e.tagName,
+                        type: e.type || '',
+                        name: e.name || '',
+                        id: e.id || '',
+                        ph: e.placeholder || '',
+                        ac: e.getAttribute('autocomplete') || '',
+                        txt: (e.innerText || e.value || '').slice(0, 25)
+                      }));
+                    let out = grab(document);
+                    for (const f of document.querySelectorAll('iframe')) {
+                      try { out = out.concat(grab(f.contentDocument)); } catch(e) {}
+                    }
+                    return out;
+                }"""
+            )
+        except Exception as e:  # noqa: BLE001
+            data = f"(не удалось прочитать: {e})"
+        lines = [f"URL: {page.url}", "Поля на странице:"]
+        if isinstance(data, list):
+            for d in data[:40]:
+                lines.append(
+                    f"• {d['t']} type={d['type']} name={d['name']} id={d['id']} "
+                    f"ph='{d['ph']}' ac={d['ac']} txt='{d['txt']}'"
+                )
+            if not data:
+                lines.append("(полей не найдено — возможно, форма ещё грузится)")
+        else:
+            lines.append(str(data))
+        msg = "\n".join(lines)
+        await send(msg[:3900])
+
     async def _run(self, send) -> bool:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context()
+            browser = await p.chromium.launch(headless=True, args=LAUNCH_ARGS)
+            context = await browser.new_context(
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0 Safari/537.36"),
+                locale="uk-UA",
+            )
             page = await context.new_page()
             try:
                 await send("Открываю страницу входа Prom…")
                 await page.goto(config.PROM_LOGIN_URL, wait_until="domcontentloaded",
                                 timeout=45000)
+                await page.wait_for_timeout(2500)
 
-                # некоторые страницы прячут форму за кнопкой "Вхід"
-                for opener in ["text=Вхід", "text=Войти", "text=Увійти"]:
+                # открыть форму, если она за кнопкой "Вхід"
+                for opener in OPENERS:
                     try:
-                        await page.locator(opener).first.click(timeout=2500)
+                        await page.locator(opener).first.click(timeout=2000)
+                        await page.wait_for_timeout(1500)
                         break
                     except Exception:  # noqa: BLE001
                         continue
 
-                login_el = await self._first(page, LOGIN_SELECTORS)
+                login_el = await self._first(page, LOGIN_SELECTORS, timeout=12000)
                 if not login_el:
-                    await send("Не нашёл поле логина на странице входа.")
+                    await send("Не нашёл поле логина на странице входа. "
+                               "Присылаю, что реально на странице — по этому "
+                               "подстроим селекторы:")
+                    await self._dump_fields(page, send)
                     return False
                 await login_el.fill(config.PROM_LOGIN)
 
@@ -135,14 +203,12 @@ class LoginManager:
                     await pass_el.fill(config.PROM_PASSWORD)
                 await self._click_submit(page)
 
-                # иногда пароль на втором шаге
-                if not pass_el:
-                    pass_el = await self._first(page, PASSWORD_SELECTORS, timeout=8000)
+                if not pass_el:  # пароль на втором шаге
+                    pass_el = await self._first(page, PASSWORD_SELECTORS, timeout=10000)
                     if pass_el:
                         await pass_el.fill(config.PROM_PASSWORD)
                         await self._click_submit(page)
 
-                # ждём либо OTP, либо успешный вход
                 otp_el = await self._first(page, OTP_SELECTORS, timeout=8000)
                 if otp_el:
                     code = await self._ask_otp(send)
@@ -153,11 +219,11 @@ class LoginManager:
                     await self._click_submit(page)
                     await page.wait_for_load_state("networkidle", timeout=30000)
 
-                # проверяем, что вошли: открываем кошелёк
                 await page.goto(config.PROM_BALANCE_URL, wait_until="networkidle",
                                 timeout=45000)
                 if "login" in page.url.lower() or "auth" in page.url.lower():
                     await send("Похоже, вход не прошёл (нас вернуло на страницу входа).")
+                    await self._dump_fields(page, send)
                     return False
 
                 await context.storage_state(path=config.SESSION_FILE)
@@ -172,11 +238,13 @@ class LoginManager:
         if el:
             try:
                 await el.click()
+                await page.wait_for_timeout(1500)
                 return
             except Exception:  # noqa: BLE001
                 pass
         try:
             await page.keyboard.press("Enter")
+            await page.wait_for_timeout(1500)
         except Exception:  # noqa: BLE001
             pass
 

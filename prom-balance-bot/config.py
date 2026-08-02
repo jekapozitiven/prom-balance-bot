@@ -42,9 +42,11 @@ REPEAT_ALERT_HOURS = _float("REPEAT_ALERT_HOURS", 6)
 # Источник баланса
 BALANCE_SOURCE = _get("BALANCE_SOURCE", "both").lower()  # cabinet | api | both
 
-# Кабинет (Playwright)
-PROM_BALANCE_URL = _get("PROM_BALANCE_URL", "https://my.prom.ua/cabinet/finances/wallet")
-PROM_BALANCE_REGEX = _get("PROM_BALANCE_REGEX", r"([-−]?\s?\d[\d\s ]*[.,]?\d*)\s*грн")
+# Кабинет (Playwright) — рабочие значения зашиты по умолчанию
+PROM_BALANCE_URL = _get("PROM_BALANCE_URL", "https://my.prom.ua/cms/invoice")
+PROM_BALANCE_REGEX = _get(
+    "PROM_BALANCE_REGEX", r"Баланс[:\s]*([-−]?\d[\d\s ]*[.,]?\d*)\s*₴"
+)
 PROM_LOGIN = _get("PROM_LOGIN")
 PROM_PASSWORD = _get("PROM_PASSWORD")
 PROM_LOGIN_URL = _get("PROM_LOGIN_URL", "https://my.prom.ua/")
@@ -57,8 +59,8 @@ API_ESTIMATE_START_BALANCE = _float("API_ESTIMATE_START_BALANCE", 0)
 API_COMMISSION_PERCENT = _float("API_COMMISSION_PERCENT", 0)
 API_DELIVERY_FEE = _float("API_DELIVERY_FEE", 30)
 
-# Пополнение
-PROM_TOPUP_URL = _get("PROM_TOPUP_URL", "https://my.prom.ua/cabinet/finances/wallet")
+# Пополнение (на этой же странице кабинета "Поповнення балансу")
+PROM_TOPUP_URL = _get("PROM_TOPUP_URL", "https://my.prom.ua/cms/invoice")
 
 # Файл состояния
 DB_FILE = _get("DB_FILE", os.path.join(DATA_DIR, "state.db"))

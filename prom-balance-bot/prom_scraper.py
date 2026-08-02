@@ -40,7 +40,15 @@ async def get_balance_from_cabinet() -> float:
         )
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
         context = await browser.new_context(storage_state=config.SESSION_FILE)
         page = await context.new_page()
         try:

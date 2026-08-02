@@ -37,7 +37,7 @@ async def get_balance() -> BalanceResult:
             if src == "cabinet":
                 raise
 
-    if src in ("api", "both"):
+    if src in ("api", "both") and config.PROM_API_TOKEN:
         try:
             value = await PromAPI().estimate_balance()
             return BalanceResult(value, "api", exact=False)

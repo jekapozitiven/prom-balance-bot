@@ -49,7 +49,13 @@ async def get_balance_from_cabinet() -> float:
                 "--disable-gpu",
             ],
         )
-        context = await browser.new_context(storage_state=config.SESSION_FILE)
+        context = await browser.new_context(
+            storage_state=config.SESSION_FILE,
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0 Safari/537.36"),
+            locale="uk-UA",
+        )
         page = await context.new_page()
         try:
             await page.goto(config.PROM_BALANCE_URL, wait_until="networkidle", timeout=45000)

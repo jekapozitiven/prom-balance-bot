@@ -127,42 +127,41 @@ class LoginManager:
             self._otp_future = None
 
     async def _dump_fields(self, page, send):
-        """Прислать список полей/кнопок и адрес — для настройки селекторов."""
-        try:
-            data = await page.evaluate(
-                """() => {
-                    const grab = (root) => Array.from(root.querySelectorAll('input,button'))
-                      .map(e => ({
-                        t: e.tagName,
-                        type: e.type || '',
-                        name: e.name || '',
-                        id: e.id || '',
-                        ph: e.placeholder || '',
-                        ac: e.getAttribute('autocomplete') || '',
-                        txt: (e.innerText || e.value || '').slice(0, 25)
-                      }));
-                    let out = grab(document);
-                    for (const f of document.querySelectorAll('iframe')) {
-                      try { out = out.concat(grab(f.contentDocument)); } catch(e) {}
-                    }
-                    return out;
-                }"""
-            )
-        except Exception as e:  # noqa: BLE001
-            data = f"(не удалось прочитать: {e})"
-        lines = [f"URL: {page.url}", "Поля на странице:"]
-        if isinstance(data, list):
-            for d in data[:40]:
-                lines.append(
-                    f"• {d['t']} type={d['type']} name={d['name']} id={d['id']} "
-                    f"ph='{d['ph']}' ac={d['ac']} txt='{d['txt']}'"
-                )
-            if not data:
-                lines.append("(полей не найдено — возможно, форма ещё грузится)")
-        else:
-            lines.append(str(data))
-        msg = "\n".join(lines)
-        await send(msg[:3900])
+        """Прислать поля ВСЕХ фреймов (форма входа бывает в cross-origin iframe)."""
+        lines = [f"URL: {page.url}"]
+        frames = page.frames
+        lines.append(f"Фреймов: {len(frames)}")
+        for i, fr in enumerate(frames):
+            url = ""
+            try:
+                url = fr.url
+            except Exception:  # noqa: BLE001
+                url = "?"
+            # только фреймы, где есть поля ввода — чтобы не засорять
+            try:
+                inputs = await fr.locator("input").all()
+            except Exception as e:  # noqa: BLE001
+                lines.append(f"[frame {i}] {url} — ошибка: {e}")
+                continue
+            if not inputs:
+                continue
+            lines.append(f"[frame {i}] {url} — input'ов: {len(inputs)}")
+            for el in inputs[:15]:
+                try:
+                    a = await el.evaluate(
+                        "e => ({ty:e.type||'', n:e.name||'', id:e.id||'', "
+                        "ph:e.placeholder||'', ac:e.getAttribute('autocomplete')||'', "
+                        "im:e.getAttribute('inputmode')||''})"
+                    )
+                    lines.append(
+                        f"  • input ty={a['ty']} name={a['n']} id={a['id']} "
+                        f"ph='{a['ph']}' ac={a['ac']} im={a['im']}"
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+        if len(lines) <= 2:
+            lines.append("(полей ввода не найдено ни в одном фрейме)")
+        await send("\n".join(lines)[:3900])
 
     async def _run(self, send) -> bool:
         async with async_playwright() as p:
@@ -190,20 +189,19 @@ class LoginManager:
                     except Exception:  # noqa: BLE001
                         continue
 
-                # шаг 2: нажать "Вхід/Войти", если появилось
+                # шаг 2: нажать "Вхід/Войти", если появилось (в сайдбаре/меню)
                 for opener in OPENERS:
                     try:
                         await page.locator(opener).first.click(timeout=2000)
-                        await page.wait_for_timeout(2000)
+                        await page.wait_for_timeout(3500)  # ждём загрузку формы/iframe
                         break
                     except Exception:  # noqa: BLE001
                         continue
 
                 login_el = await self._first(page, LOGIN_SELECTORS, timeout=12000)
                 if not login_el:
-                    await send("Не нашёл поле логина на странице входа. "
-                               "Присылаю, что реально на странице — по этому "
-                               "подстроим селекторы:")
+                    await send("Не нашёл поле логина. Присылаю поля всех фреймов — "
+                               "по ним подстрою точные селекторы:")
                     await self._dump_fields(page, send)
                     return False
                 await login_el.fill(config.PROM_LOGIN)

@@ -61,9 +61,17 @@ async def get_balance_from_cabinet() -> float:
             body = await page.inner_text("body")
             balance = _parse_balance(body)
             if balance is None:
+                keys = ("грн", "₴", "UAH", "баланс", "Баланс", "рахун",
+                        "Рахун", "кошел", "Кошел", "борг", "Борг")
+                found = []
+                for line in body.splitlines():
+                    s = line.strip()
+                    if s and any(k in s for k in keys):
+                        found.append(s[:90])
+                snippet = " | ".join(found[:15]) if found else body[:300]
                 raise RuntimeError(
-                    "Не удалось найти баланс на странице. "
-                    "Проверь PROM_BALANCE_URL и PROM_BALANCE_REGEX."
+                    "Не нашёл баланс на странице. Что там реально написано: "
+                    + snippet
                 )
             # переписываем сессию свежими куками — так вход "1 раз" живёт долго
             try:

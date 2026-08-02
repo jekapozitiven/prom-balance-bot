@@ -11,10 +11,14 @@ from playwright.async_api import async_playwright
 
 import config
 
+# Рабочие значения зашиты жёстко, чтобы не зависеть от переменных Railway/config.
+BALANCE_URL = "https://my.prom.ua/cms/invoice"
+BALANCE_REGEX = r"Баланс[:\s]*([-−]?\d[\d\s ]*[.,]?\d*)\s*₴"
+
 
 def _parse_balance(text: str) -> float | None:
-    """Найти число баланса в тексте страницы по регэкспу из конфига."""
-    m = re.search(config.PROM_BALANCE_REGEX, text)
+    """Найти число баланса в тексте страницы."""
+    m = re.search(BALANCE_REGEX, text)
     if not m:
         return None
     raw = m.group(1)
@@ -68,7 +72,7 @@ async def get_balance_from_cabinet() -> float:
                 except Exception:  # noqa: BLE001
                     continue
 
-            await page.goto(config.PROM_BALANCE_URL, wait_until="networkidle", timeout=45000)
+            await page.goto(BALANCE_URL, wait_until="networkidle", timeout=45000)
             # если сессия протухла и нас редиректнуло на логин
             if "login" in page.url.lower() or "auth" in page.url.lower():
                 raise RuntimeError(

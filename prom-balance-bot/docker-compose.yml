@@ -1,0 +1,10 @@
+services:
+  prom-balance-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      # сессия кабинета и БД состояния переживают перезапуски
+      - ./data:/data

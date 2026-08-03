@@ -76,7 +76,7 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("Проверяю баланс…")
     try:
-        res = await get_balance()
+        res = await _get_balance_auto(context)
     except Exception as e:  # noqa: BLE001
         await msg.edit_text(f"⚠️ Не удалось получить баланс:\n{e}")
         return
@@ -157,11 +157,41 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Код принят, продолжаю вход…")
 
 
+# ---------- Получение баланса с авто-перелогином ----------
+
+async def _get_balance_auto(context: ContextTypes.DEFAULT_TYPE):
+    """Баланс; если сессия кабинета мертва — сам логинится по логину/паролю.
+
+    Полностью автономно: участие нужно только если Prom потребует SMS-код.
+    """
+    try:
+        return await get_balance()
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        is_session = any(k in msg for k in (
+            "сесс", "неактив", "/login", "истек", "login", "auth", "redirect"))
+        if not (is_session and config.PROM_LOGIN and config.PROM_PASSWORD):
+            raise
+        # не логинимся чаще раза в 20 минут
+        last = storage.get_float("last_relogin_ts", 0)
+        if time.time() - last < 20 * 60:
+            raise
+        storage.set("last_relogin_ts", time.time())
+
+        async def send(t):
+            await context.bot.send_message(config.TELEGRAM_CHAT_ID, t)
+
+        ok = await login_manager.run(send)
+        if not ok:
+            raise RuntimeError("Не удалось автоматически обновить сессию кабинета")
+        return await get_balance()
+
+
 # ---------- Периодическая проверка ----------
 
 async def check_job(context: ContextTypes.DEFAULT_TYPE):
     try:
-        res = await get_balance()
+        res = await _get_balance_auto(context)
     except Exception as e:  # noqa: BLE001
         log.warning("Проверка не удалась: %s", e)
         # уведомим об ошибке источника не чаще раза в REPEAT_ALERT_HOURS

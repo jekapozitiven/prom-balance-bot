@@ -180,31 +180,42 @@ class LoginManager:
             )
             page = await context.new_page()
             try:
-                await send("Открываю страницу входа Prom…")
-                await page.goto(config.PROM_LOGIN_URL, wait_until="domcontentloaded",
-                                timeout=45000)
-                await page.wait_for_timeout(2500)
+                await send("Открываю вход в кабинет продавца Prom…")
+                # прямой путь: страница входа продавца с возвратом на баланс
+                signin = ("https://prom.ua/ua/sign-in?next="
+                          "https%3A%2F%2Fmy.prom.ua%2Fcms%2Finvoice")
+                await page.goto(signin, wait_until="domcontentloaded", timeout=45000)
+                await page.wait_for_timeout(3500)
 
-                # шаг 1: открыть меню кабинета ("Кабінет")
-                for opener in ["button:has-text('Кабінет')",
-                               "button:has-text('Кабинет')", "text=Кабінет"]:
-                    try:
-                        await page.locator(opener).first.click(timeout=2500)
-                        await page.wait_for_timeout(2500)
-                        break
-                    except Exception:  # noqa: BLE001
-                        continue
+                login_el = await self._first(page, LOGIN_SELECTORS, timeout=8000)
 
-                # шаг 2: нажать "Вхід/Войти", если появилось (в сайдбаре/меню)
-                for opener in OPENERS:
-                    try:
-                        await page.locator(opener).first.click(timeout=2000)
-                        await page.wait_for_timeout(3500)  # ждём загрузку формы/iframe
-                        break
-                    except Exception:  # noqa: BLE001
-                        continue
-
-                login_el = await self._first(page, LOGIN_SELECTORS, timeout=12000)
+                # запасной путь (как в интерфейсе): Кабінет → Кабінет продавця → Вхід
+                if not login_el:
+                    for opener in ["button:has-text('Кабінет')",
+                                   "button:has-text('Кабинет')", "text=Кабінет"]:
+                        try:
+                            await page.locator(opener).first.click(timeout=2500)
+                            await page.wait_for_timeout(2500)
+                            break
+                        except Exception:  # noqa: BLE001
+                            continue
+                    for opener in ["text=Кабінет продавця", "text=Кабинет продавца",
+                                   "a:has-text('продавц')", "button:has-text('продавц')",
+                                   "*:has-text('Кабінет продавця')"]:
+                        try:
+                            await page.locator(opener).first.click(timeout=2500)
+                            await page.wait_for_timeout(3500)
+                            break
+                        except Exception:  # noqa: BLE001
+                            continue
+                    for opener in OPENERS:
+                        try:
+                            await page.locator(opener).first.click(timeout=2000)
+                            await page.wait_for_timeout(3000)
+                            break
+                        except Exception:  # noqa: BLE001
+                            continue
+                    login_el = await self._first(page, LOGIN_SELECTORS, timeout=12000)
                 if not login_el:
                     await send("Не нашёл поле логина. Присылаю поля всех фреймов — "
                                "по ним подстрою точные селекторы:")

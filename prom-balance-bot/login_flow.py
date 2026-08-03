@@ -149,19 +149,36 @@ class LoginManager:
             except Exception as e:  # noqa: BLE001
                 lines.append(f"[frame {i}] {url} — ошибка: {e}")
                 continue
-            if not inputs:
+            try:
+                buttons = await fr.locator("button").all()
+            except Exception:  # noqa: BLE001
+                buttons = []
+            if not inputs and not buttons:
                 continue
-            lines.append(f"[frame {i}] {url} — input'ов: {len(inputs)}")
-            for el in inputs[:15]:
+            lines.append(
+                f"[frame {i}] {url} — input'ов: {len(inputs)}, кнопок: {len(buttons)}"
+            )
+            for el in inputs[:12]:
                 try:
                     a = await el.evaluate(
                         "e => ({ty:e.type||'', n:e.name||'', id:e.id||'', "
                         "ph:e.placeholder||'', ac:e.getAttribute('autocomplete')||'', "
-                        "im:e.getAttribute('inputmode')||''})"
+                        "im:e.getAttribute('inputmode')||'', v:(e.value||'').slice(0,20)})"
                     )
                     lines.append(
                         f"  • input ty={a['ty']} name={a['n']} id={a['id']} "
-                        f"ph='{a['ph']}' ac={a['ac']} im={a['im']}"
+                        f"ph='{a['ph']}' ac={a['ac']} im={a['im']} val='{a['v']}'"
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+            for el in buttons[:10]:
+                try:
+                    b = await el.evaluate(
+                        "e => ({ty:e.type||'', dis:e.disabled, "
+                        "tx:(e.innerText||'').slice(0,30)})"
+                    )
+                    lines.append(
+                        f"  • button ty={b['ty']} disabled={b['dis']} txt='{b['tx']}'"
                     )
                 except Exception:  # noqa: BLE001
                     continue
@@ -221,9 +238,18 @@ class LoginManager:
                                "по ним подстрою точные селекторы:")
                     await self._dump_fields(page, send)
                     return False
+                # вводим телефон, даём форме провалидировать и жмём Продовжити/Enter
+                await login_el.click()
                 await login_el.fill(config.PROM_LOGIN)
+                await page.wait_for_timeout(1000)
+                try:
+                    await login_el.press("Enter")
+                except Exception:  # noqa: BLE001
+                    pass
+                await self._click_submit(page)
+                await page.wait_for_timeout(2500)
 
-                pass_el = await self._first(page, PASSWORD_SELECTORS, timeout=4000)
+                pass_el = await self._first(page, PASSWORD_SELECTORS, timeout=6000)
                 if pass_el:
                     await pass_el.fill(config.PROM_PASSWORD)
                 await self._click_submit(page)

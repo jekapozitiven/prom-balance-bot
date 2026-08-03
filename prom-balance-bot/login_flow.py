@@ -11,10 +11,12 @@ SMS/2FA-код — просит тебя прислать код в чат. Ты
 """
 import asyncio
 import logging
+import re
 
 from playwright.async_api import async_playwright
 
 import config
+from prom_scraper import BALANCE_URL, BALANCE_REGEX
 
 log = logging.getLogger("login")
 
@@ -229,17 +231,39 @@ class LoginManager:
                         return False
                     await otp_el.fill(code)
                     await self._click_submit(page)
-                    await page.wait_for_load_state("networkidle", timeout=30000)
+                    await page.wait_for_timeout(4000)
 
-                await page.goto(config.PROM_BALANCE_URL, wait_until="networkidle",
-                                timeout=45000)
-                if "login" in page.url.lower() or "auth" in page.url.lower():
-                    await send("Похоже, вход не прошёл (нас вернуло на страницу входа).")
+                # ПРОВЕРКА ПО ФАКТУ: успех только если реально открылся баланс
+                await page.goto(BALANCE_URL, wait_until="domcontentloaded", timeout=60000)
+                got_balance = False
+                for _ in range(20):
+                    u = page.url.lower()
+                    if ("my.prom.ua" not in u) or ("source=redirect" in u) or ("next=" in u):
+                        break
+                    try:
+                        body = await page.inner_text("body")
+                    except Exception:  # noqa: BLE001
+                        body = ""
+                    if re.search(BALANCE_REGEX, body):
+                        got_balance = True
+                        break
+                    await page.wait_for_timeout(1000)
+
+                if not got_balance:
+                    await send("Вход не подтвердился — баланс не открылся. "
+                               f"URL={page.url}. Показываю, что сейчас на экране входа:")
                     await self._dump_fields(page, send)
+                    try:
+                        txt = await page.inner_text("body")
+                        keep = [s.strip() for s in txt.splitlines()
+                                if s.strip()][:20]
+                        await send(("Текст страницы:\n" + "\n".join(keep))[:3500])
+                    except Exception:  # noqa: BLE001
+                        pass
                     return False
 
                 await context.storage_state(path=config.SESSION_FILE)
-                await send("✅ Вход выполнен, сессия сохранена. Мониторинг активен.")
+                await send("✅ Вход выполнен, баланс доступен. Сессия сохранена.")
                 return True
             finally:
                 await context.close()
